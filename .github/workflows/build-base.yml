@@ -3,7 +3,6 @@ name: Build Base ComfyUI Image
 on:
   push:
     branches: [ "main" ]
-    # Only trigger if infrastructure files change
     paths:
       - 'Dockerfile'
       - 'utils.py'
@@ -13,7 +12,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # Converts "User/repo" to "user/repo" for Docker compatibility
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -24,6 +22,37 @@ jobs:
       packages: write
 
     steps:
+      # 1. CLEAN UP DISK SPACE (CRITICAL FOR NVIDIA IMAGES)
+      - name: Free Disk Space (Ubuntu)
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // This is a "hack" using raw shell commands to free ~20GB
+            const fs = require('fs');
+            const child_process = require('child_process');
+            
+            console.log("Listing space before cleanup:");
+            child_process.execSync('df -h', { stdio: 'inherit' });
+
+            const commands = [
+              'sudo rm -rf /usr/share/dotnet',
+              'sudo rm -rf /usr/local/lib/android',
+              'sudo rm -rf /opt/ghc',
+              'sudo rm -rf "/usr/local/share/boost"',
+              'sudo rm -rf "$AGENT_TOOLSDIRECTORY"'
+            ];
+            
+            commands.forEach(cmd => {
+              try {
+                child_process.execSync(cmd, { stdio: 'inherit' });
+              } catch (e) {
+                console.log("Failed to run: " + cmd);
+              }
+            });
+
+            console.log("Listing space after cleanup:");
+            child_process.execSync('df -h', { stdio: 'inherit' });
+
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -46,8 +75,8 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          # Tags the image as 'latest'
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          # Uses GitHub Actions cache to speed up subsequent builds
+          # Using GHA cache helps speed, but consumes space. 
+          # Since we freed space, this should now work.
           cache-from: type=gha
           cache-to: type=gha,mode=max
