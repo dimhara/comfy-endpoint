@@ -2,7 +2,7 @@
 # DOCKERFILE.BAKED
 # Inherits from the base image and pulls models
 # ==========================================
-FROM ghcr.io/dimhara/comfy-secure:latest
+FROM ghcr.io/dimhara/comfy-endpoint:latest
 
 # Define the model mapping for the Qwen setup.
 # Format: RepoID:RemoteFile:TargetDir[:LocalRename]
