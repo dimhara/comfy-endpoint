@@ -38,9 +38,13 @@ kill $TAIL_PID
 echo "✅ ComfyUI is Alive!"
 
 # =================================================================
-# 5. START SERVERLESS HANDLER
+# 5. START SERVERLESS HANDLER OR INTERACTIVE MODE
 # =================================================================
 echo "---------------------------------------------------"
-echo "🎧 Starting RunPod Handler..."
-echo "---------------------------------------------------"
-python3 rp_handler.py
+if [ "$MODE" == "interactive" ]; then
+    echo "🎧 Interactive Mode Detected. Sleeping indefinitely..."
+    sleep infinity
+else
+    echo "🎧 Starting RunPod Handler..."
+    python3 rp_handler.py
+fi
