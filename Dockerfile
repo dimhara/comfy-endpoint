@@ -63,7 +63,7 @@ ENV PYTHONUNBUFFERED=1
 # libgl1/libglib2.0-0: For OpenCV
 RUN apt-get update && apt-get install -y \
     python3 python3-pip openssh-server \
-    libgl1 libglib2.0-0 \
+    libgl1 libglib2.0-0 curl\
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
