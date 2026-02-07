@@ -9,28 +9,22 @@ def get_model_map():
     """
     Parses the MODELS environment variable.
     Format: RepoID:RemoteFile:TargetDir[:LocalRename]
-    Example: unsloth/Qwen:mmproj.gguf:models/text_encoders:qwen-mmproj.gguf
     """
     models_env = os.environ.get("MODELS", "")
     if not models_env:
-        print("ℹ️  No MODELS environment variable set.")
         return []
     
     model_list = []
-    # Split by comma, ignore empty strings
     entries = [e.strip() for e in models_env.split(",") if e.strip()]
     
     for entry in entries:
         parts = entry.split(":")
         if len(parts) < 3:
-            print(f"⚠️  Skipping invalid entry: {entry}")
             continue
             
         repo_id = parts[0].strip()
         filename = parts[1].strip()
         target_dir = parts[2].strip()
-        
-        # Optional 4th argument for renaming (e.g. for mmproj or flattening VAE)
         local_name = parts[3].strip() if len(parts) > 3 else None
         
         model_list.append({
@@ -43,23 +37,28 @@ def get_model_map():
     return model_list
 
 def prepare_models():
-    """
-    Downloads or copies models based on the MODELS env var.
-    """
-    # Assuming this runs from /ComfyUI
     base_path = os.getcwd() 
-    
     model_list = get_model_map()
+    
+    # Check if we have a persistent network volume
+    # If yes, we use it for caching and symlink to save space.
+    # If no, we download and MOVE to save space.
+    use_network_cache = os.path.exists(RUNPOD_CACHE_DIR)
+    
     if not model_list:
         return
 
     print(f"--- 📦 Processing {len(model_list)} models ---")
+    if use_network_cache:
+        print(f"   ✅ Network Volume Detected: {RUNPOD_CACHE_DIR}")
+    else:
+        print(f"   ⚠️  No Network Volume. Using ephemeral storage (Download -> Move).")
 
     for m in model_list:
         repo_id = m["repo_id"]
         filename = m["filename"]
         
-        # Resolve destination directory
+        # Resolve destination
         if m["target_dir"].startswith("/"):
             dest_dir = m["target_dir"]
         else:
@@ -68,29 +67,45 @@ def prepare_models():
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir, exist_ok=True)
 
-        # Determine final file name (handle renaming)
         final_name = m["local_name"] if m["local_name"] else os.path.basename(filename)
         dest_path = os.path.join(dest_dir, final_name)
 
         if os.path.exists(dest_path):
-            print(f"✅ Already exists: {dest_path}")
+            print(f"✅ Exists: {dest_path}")
             continue
 
         print(f"⬇️  Resolving: {repo_id}/{filename}")
         
         try:
-            # hf_hub_download automatically checks RUNPOD_CACHE_DIR if HF_HOME is set there,
-            # or uses the default ~/.cache/huggingface/hub.
+            # 1. DOWNLOAD
+            # If using network cache, force that dir. Otherwise use default (~/.cache).
+            cache_target = RUNPOD_CACHE_DIR if use_network_cache else None
+            
             cached_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
+                cache_dir=cache_target
             )
             
-            # Move/Copy from HF cache to the ComfyUI folder structure
-            # shutil.copy is used to ensure the file remains in the cache for future pods
-            # but is also available in the specific ComfyUI path.
-            shutil.copy(cached_path, dest_path)
-            print(f"   💾 Saved to: {dest_path}")
+            # 2. LINK or MOVE
+            if use_network_cache:
+                # Symlink: Data stays on volume, ComfyUI sees a file. Zero container space used.
+                print(f"   🔗 Symlinking: {cached_path} -> {dest_path}")
+                if os.path.exists(dest_path) or os.path.islink(dest_path):
+                    os.remove(dest_path)
+                os.symlink(cached_path, dest_path)
+            else:
+                # Move: Take file out of cache and put it in ComfyUI. 
+                # Clears the cache space and puts data where needed.
+                print(f"   🚚 Moving: {cached_path} -> {dest_path}")
+                
+                # We use copy+remove because moving across filesystems (if /root/.cache is a volume) can fail,
+                # but standard move usually handles it. 
+                # However, since cached_path in HF might be a symlink to a blob, we must be careful.
+                # hf_hub_download returns the actual file path (resolving symlinks) usually.
+                
+                # Use shutil.move which handles copy-then-delete if needed.
+                shutil.move(cached_path, dest_path)
             
         except Exception as e:
             print(f"❌ Error processing {repo_id}/{filename}: {e}")

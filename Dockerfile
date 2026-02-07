@@ -28,8 +28,9 @@ RUN uv venv
 ENV VIRTUAL_ENV=/ComfyUI/.venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
+RUN uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+
 # 5. Install Core Requirements
-# Note: PyTorch wheels include their own CUDA libs, so 'runtime' base image is fine.
 RUN uv pip install --no-cache-dir -r requirements.txt
 
 # 6. Install Custom Nodes
@@ -41,9 +42,9 @@ WORKDIR /ComfyUI/custom_nodes/ComfyUI-GGUF
 RUN uv pip install --no-cache-dir -r requirements.txt
 
 # 7. Install Hugging Face Tools
-RUN uv pip install --no-cache-dir huggingface_hub[hf_transfer]
+RUN uv pip install --no-cache-dir huggingface_hub[hf_transfer] runpod requests websocket-client
 
-# 8. CLEANUP (for smaller COPY)
+# 8. Cleanup builder
 # Remove git history and UV cache to keep the layer small
 RUN rm -rf /ComfyUI/.git && \
     find /ComfyUI/custom_nodes -name ".git" -type d -exec rm -rf {} + && \
@@ -77,6 +78,7 @@ ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # 4. Copy Scripts
 COPY utils.py /ComfyUI/utils.py
+COPY rp_handler.py /ComfyUI/rp_handler.py
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
