@@ -101,6 +101,8 @@ def get_images(ws, prompt, client_id, job):
 # =================================================================
 def handler(job):
     job_input = job["input"]
+
+    debug_mode = job_input.get("debug", False)
     
     # 1. Input Validation
     if "workflow" not in job_input:
@@ -147,8 +149,11 @@ def handler(job):
     finally:
         # 6. Cleanup & Secure Wipe
         ws.close()
-        clear_directory(INPUT_DIR)
-        clear_directory(OUTPUT_DIR)
+        if debug_mode:
+            print("⚠️ DEBUG MODE ENABLED: Skipping file cleanup. Check /ComfyUI/input and /output.")
+        else:
+            clear_directory(INPUT_DIR)
+            clear_directory(OUTPUT_DIR)
 
 if __name__ == "__main__":
     runpod.serverless.start({"handler": handler})

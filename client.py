@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--workflow", default="workflow_api.json", help="API Workflow JSON file")
     parser.add_argument("--img", help="Path to input image (e.g. photo.jpg)")
     parser.add_argument("--poll_interval", type=int, default=2, help="Seconds between status checks")
+    parser.add_argument("--debug", action="store_true", help="Leave files on server for SSH inspection")
     
     args = parser.parse_args()
 
@@ -51,7 +52,8 @@ def main():
     payload = {
         "input": {
             "workflow": workflow_data,
-            "images": {}
+            "images": {},
+            "debug": args.debug
         }
     }
 
