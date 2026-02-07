@@ -1,4 +1,3 @@
-
 # ==========================================
 # DOCKERFILE.BAKED
 # Inherits from the base image and pulls models
