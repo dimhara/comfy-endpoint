@@ -4,6 +4,7 @@ import base64
 import os
 import json
 import argparse
+import random
 
 # ==============================================================================
 # CONFIGURATION
@@ -72,7 +73,11 @@ def main():
                     print(f"🎯 Smart Injection: Updating Node {node_id} to use '{remote_filename}'")
                     node_data["inputs"]["image"] = remote_filename
                     found_node = True
-            
+                
+                if "seed" in node_data.get("inputs", {}):
+                    new_seed = random.randint(1, 10**15)
+                    print(f"🎲 Randomizing Seed (Node {node_id}): {new_seed}")
+                    node_data["inputs"]["seed"] = new_seed                
             if not found_node:
                 print("⚠️  Warning: Image provided but no 'LoadImage' node found in JSON.")
 
