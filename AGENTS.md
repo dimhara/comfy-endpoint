@@ -1,56 +1,79 @@
 # AGENTS.md - Developer Guide
 
-This document explains the architecture and design philosophy of the `comfy-secure` project for future LLM agents and developers.
+This document explains the architecture, design philosophy, and critical operational details of the `dimhara-comfy-endpoint` project.
 
 ## 1. Project Goal
-To create a high-performance, security-focused container for running ComfyUI on Serverless GPU providers (specifically RunPod).
+To provide a production-grade, serverless-ready container for running ComfyUI on RunPod, specifically optimized for high-speed ephemeral execution.
 
-**Current Status:** Infrastructure Phase (Base Image + SSH + Model Management).
-**Next Phase:** Implementation of `rp_handler.py` for Serverless API wrapping.
+**Current Status:** Production Ready.
+**Key Features:** Secure RAM-disk I/O, Race-Condition protections, Multi-Image injection, and Smart Prompting.
 
-## 2. Directory Structure & Logic
+## 2. Critical Architecture Notes (The "Serverless Gap")
+
+Moving from a persistent Pod to Serverless introduces specific challenges regarding filesystem timing and API synchronization.
+
+### The "RAM Disk Race" (Solved)
+*   **Problem:** On Serverless, `/ComfyUI/input` is a symlink to `/dev/shm` (RAM). When `rp_handler.py` writes a file and immediately triggers the ComfyUI API, Python's internal buffer or the OS filesystem buffer may not flush to "disk" fast enough. ComfyUI reads the file as 0 bytes, causing "Noise" output or silent failures.
+*   **Solution:** The handler now forces `f.flush()` and `os.fsync(f.fileno())` immediately after writing input images.
+
+### The "History API Race" (Solved)
+*   **Problem:** ComfyUI sends the "Execution Finished" WebSocket message *milliseconds* before it writes the metadata to its internal History database. Querying `/history/{prompt_id}` immediately often returns 404 or empty data.
+*   **Solution:** `rp_handler.py` implements a retry loop (5 retries with backoff) to wait for the database write to complete.
+
+## 3. Directory Structure & Logic
+
+### `rp_handler.py` (The Serverless Bridge)
+*   **Input:** Accepts Base64 images and a JSON workflow.
+*   **Processing:**
+    1.  Wipes input/output directories (Secure Delete).
+    2.  Decodes images to `/ComfyUI/input` with **forced fsync**.
+    3.  Injects the workflow via WebSocket.
+    4.  Polls for progress.
+    5.  Retries the History API to capture filenames.
+    6.  Encodes output images to Base64.
+*   **Debug Mode:** If `debug: true` is passed in the payload, files are *not* deleted after execution, allowing SSH inspection.
+
+### `client.py` (The Smart Client)
+*   **Multi-Image Support:** Accepts multiple images (`--img 1.png 2.png`). It maps them to `LoadImage` nodes in the workflow based on Node ID order (lowest ID first).
+*   **Smart Injection:**
+    *   **Images:** Replaces filenames in `LoadImage` nodes and uploads the Base64 data.
+    *   **Prompts:** Detects if a node is `CLIPTextEncode` (Standard) or `TextEncodeQwenImageEditPlus` (Custom) and injects text into the correct field.
+    *   **Seeds:** Automatically randomizes inputs named `seed` to ensure variety.
+*   **Polling:** Handles the async nature of RunPod's `/run` and `/status` endpoints.
 
 ### `utils.py` (The Model Manager)
 *   **Purpose:** Handles downloading models from Hugging Face or linking them from the RunPod Host Cache (`/runpod-volume/huggingface-cache`).
-*   **Syntax:** It parses the `MODELS` environment variable using a colon-delimited format:
-    `RepoID : RemoteFilename : TargetDir [ : LocalRename ]`
-*   **Renaming Logic:**
-    *   If `LocalRename` is provided, the file is saved/linked as that specific name.
-    *   This is critical for files like `mmproj-BF16.gguf` which ComfyUI-GGUF expects to be named `*-mmproj-*.gguf`.
-    *   It also handles flattening nested HF paths (e.g., `split_files/vae/vae.safetensors` -> `models/vae/vae.safetensors`).
+*   **Logic:** Prioritizes Host Cache (Symlinks) > Hugging Face Download. This ensures 0GB disk usage if the host has the model.
 
-### `Dockerfile` (Multi-Stage)
-*   **Builder Stage:** Uses `nvidia/cuda-devel` to install system build tools. Uses `uv` to create a Python virtual environment (`.venv`) and install ComfyUI + Nodes.
-*   **Runtime Stage:** Uses `nvidia/cuda-runtime`. Copies **only** the `/ComfyUI` folder and the `.venv` from the builder. This reduces image size and removes compiler attack surfaces.
+## 4. Operational Guide
 
-### `Dockerfile.baked`
-*   **Purpose:** Extends the base image to include heavy model files directly in the Docker image layer.
-*   **Use Case:** Faster cold-starts on RunPod (no download time), at the cost of larger image storage.
-*   **Mechanism:** Sets the `MODELS` ARG and runs `utils.py` during the build process.
+### Deploying Updates
+1.  **Code Changes:** Commit changes to `rp_handler.py` or `start.sh`.
+2.  **Build:** The GitHub Action `build-base.yml` will automatically build and push to GHCR.
+3.  **RunPod:** Restart the generic Pod or update the Serverless Endpoint Image URL (forcing a fresh pull).
 
-### `start.sh`
-*   **Role:** The Container Entrypoint.
-*   **Flow:**
-    1.  Sets up OpenSSH server (generates keys if missing).
-    2.  Runs `utils.py` to ensure models are present (downloading if not "baked").
-    3.  Activates the `uv` virtual environment.
-    4.  Launches ComfyUI in listen mode.
+### Debugging "Noise" or "Empty Output"
+If the endpoint returns success but the image is random noise:
+1.  **Check I/O:** It is likely the Input Race Condition. Ensure `os.fsync` is active in the handler.
+2.  **Glass Box Test:**
+    *   Deploy as a standard GPU Pod.
+    *   SSH Tunnel: `ssh -L 8188:127.0.0.1:8188 root@<IP>`.
+    *   Run `client.py` against `localhost` (requires modifying client URL) OR use the Web UI to verify the workflow integrity.
 
-## 3. Environment Variables
+### Debugging "Job Succeeded but No Output"
+If the client says "Job succeeded" but saves no files:
+1.  **Check History:** It is the History API Race Condition. Ensure the retry loop in `rp_handler.py` is active.
+2.  **Debug Mode:** Run `python client.py ... --debug`. SSH into the serverless worker (if active) and check `/ComfyUI/output` to see if files actually exist.
+
+## 5. Environment Variables
 | Variable | Description |
 | :--- | :--- |
-| `MODELS` | Comma-separated list of models to download/link. |
+| `MODELS` | Comma-separated list of models to download/link (RepoID:Filename:Target). |
 | `PUBLIC_KEY` | SSH Public Key for authorized access. |
-| `HF_TOKEN` | (Optional) Hugging Face token for private repos. |
-| `HF_HUB_ENABLE_HF_TRANSFER` | Enabled by default for fast downloads. |
+| `HF_TOKEN` | (Optional) Hugging Face token. |
 
----
+## 6. Security
+*   **Localhost Binding:** ComfyUI listens on `127.0.0.1`.
+*   **Secure Wipe:** Files are overwritten with zeros before deletion to prevent RAM scraping.
+*   **SSH:** Only accessible via Key-based authentication.
 
-## 4. Maintenance Notes
-*   **ComfyUI Updates:** To update ComfyUI, rebuild the Base Image (Docker cache will break at the `git clone` step if the repo has changed).
-*   **New Nodes:** Add `git clone` commands in the Builder stage of the `Dockerfile`.
-
-## 5. Security & Networking
-*   **Localhost Binding:** ComfyUI is configured in `start.sh` to listen on `127.0.0.1`. 
-*   **Tunneling:** To access the Web UI, an SSH tunnel must be established (`ssh -L 8188:127.0.0.1:8188`). 
-*   **Rationale:** This prevents unauthorized access via RunPod's public-facing proxy/IPs.
