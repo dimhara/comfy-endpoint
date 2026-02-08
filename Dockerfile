@@ -34,7 +34,7 @@ RUN git clone --depth 1 https://github.com/city96/ComfyUI-GGUF && \
     cd ComfyUI-GGUF && \
     uv pip install --no-cache-dir -r requirements.txt
 
-RUN uv pip install --no-cache-dir huggingface_hub[hf_transfer] runpod requests websocket-client
+RUN uv pip install --no-cache-dir huggingface_hub[hf_transfer] runpod requests websocket-client cryptography
 
 # 6. Clean Builder Layer
 RUN rm -rf /ComfyUI/.git && \
