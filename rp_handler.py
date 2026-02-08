@@ -1,6 +1,6 @@
 import runpod
 import requests
-import websocket  # pip install websocket-client
+import websocket
 import json
 import uuid
 import base64
@@ -9,21 +9,19 @@ import time
 from cryptography.fernet import Fernet
 
 # =================================================================
-# CONFIGURATION & SECURITY
+# CONFIGURATION
 # =================================================================
 SERVER_ADDRESS = "127.0.0.1:8188"
 INPUT_DIR = "/ComfyUI/input"
 OUTPUT_DIR = "/ComfyUI/output"
 
-# Standardizing with ENCRYPTION_KEY env var
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
 cipher = Fernet(ENCRYPTION_KEY.encode()) if ENCRYPTION_KEY else None
 
 # =================================================================
-# SECURITY & FILESYSTEM HELPERS
+# HELPERS
 # =================================================================
 def secure_delete(path):
-    """Overwrites a file with zeros before deleting it (RAM disk safety)."""
     if os.path.exists(path):
         try:
             file_size = os.path.getsize(path)
@@ -36,7 +34,6 @@ def secure_delete(path):
             print(f"⚠️ Secure delete error: {e}")
 
 def clear_directory(path):
-    """Securely wipes all files in the given directory."""
     if os.path.exists(path):
         for f in os.listdir(path):
             file_path = os.path.join(path, f)
@@ -47,10 +44,6 @@ def clear_directory(path):
 # COMFYUI API LOGIC
 # =================================================================
 def get_images(ws, prompt, client_id, job):
-    """
-    Submits workflow and monitors progress.
-    FIX: Includes a retry loop for History API to prevent race conditions.
-    """
     # 1. Submit Prompt
     p = {"prompt": prompt, "client_id": client_id}
     response = requests.post(f"http://{SERVER_ADDRESS}/prompt", json=p)
@@ -71,16 +64,19 @@ def get_images(ws, prompt, client_id, job):
         else:
             continue
 
-    # 3. Retrieve History (Retry Loop Fix)
+    # 3. Retrieve History (Retry Loop)
     history = {}
     for i in range(5):
-        time.sleep(0.2) # Backoff
-        resp = requests.get(f"http://{SERVER_ADDRESS}/history/{prompt_id}")
-        if resp.status_code == 200:
-            data = resp.json()
-            if prompt_id in data:
-                history = data[prompt_id]
-                break
+        time.sleep(0.2)
+        try:
+            resp = requests.get(f"http://{SERVER_ADDRESS}/history/{prompt_id}")
+            if resp.status_code == 200:
+                data = resp.json()
+                if prompt_id in data:
+                    history = data[prompt_id]
+                    break
+        except Exception:
+            pass
         print(f"⏳ History API not ready, retry {i+1}/5...")
 
     if not history:
@@ -109,18 +105,14 @@ def handler(job):
         if is_encrypted:
             if not cipher:
                 return {"status": "error", "message": "Server missing ENCRYPTION_KEY."}
-            
             print("🔓 Decrypting internal payload...")
             decrypted_data = cipher.decrypt(job_input["encrypted_input"].encode()).decode()
             inner_payload = json.loads(decrypted_data)
-            
             workflow = inner_payload.get("workflow")
             images_dict = inner_payload.get("images", {})
         else:
-            # Debug/Plaintext Mode
             workflow = job_input.get("workflow")
             images_dict = job_input.get("images", {})
-            
     except Exception as e:
         return {"status": "error", "message": f"Decryption failed: {str(e)}"}
 
@@ -137,7 +129,7 @@ def handler(job):
             clear_directory(INPUT_DIR)
             clear_directory(OUTPUT_DIR)
         
-        # 2. Write Input Images (Race Condition Fix: fsync)
+        # 2. Write Input Images (fsync fix)
         for filename, b64_str in images_dict.items():
             file_path = os.path.join(INPUT_DIR, filename)
             with open(file_path, "wb") as f:
@@ -148,15 +140,24 @@ def handler(job):
         # 3. Execute Workflow
         output_files = get_images(ws, workflow, client_id, job)
         
-        # 4. Encode Output Images (Race Condition Fix: Buffer Sleep)
+        # 4. Encode Output Images (Polling Wait Fix)
         result_images = {}
-        time.sleep(0.1) 
         
         for filename in output_files:
             file_path = os.path.join(OUTPUT_DIR, filename)
+            
+            # Wait up to 2 seconds for the file to appear on disk
+            # This fixes the "Success but empty" race condition
+            for _ in range(10): 
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    break
+                time.sleep(0.2)
+            
             if os.path.exists(file_path):
                 with open(file_path, "rb") as f:
                     result_images[filename] = base64.b64encode(f.read()).decode('utf-8')
+            else:
+                print(f"⚠️ Error: Output file {filename} listed in history but missing from disk.")
 
         return {"status": "success", "images": result_images}
 
