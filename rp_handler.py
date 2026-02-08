@@ -124,6 +124,8 @@ def handler(job):
                 file_path = os.path.join(INPUT_DIR, filename)
                 with open(file_path, "wb") as f:
                     f.write(base64.b64decode(b64_str))
+                    f.flush()            # just in case
+                    os.fsync(f.fileno()) # 
                     
         # 4. Execute Workflow
         workflow = job_input["workflow"]

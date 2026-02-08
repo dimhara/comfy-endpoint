@@ -77,7 +77,8 @@ touch /ComfyUI/comfyui.log
 # Start ComfyUI in the background
 # --listen 127.0.0.1: Only accessible to localhost (secure)
 # --fast / --use-pytorch-cross-attention: Optimization flags
-python3 main.py --listen 127.0.0.1 --port 8188 --fast --use-pytorch-cross-attention >> /ComfyUI/comfyui.log 2>&1 &
+# TODO : readd --fast if it works!
+python3 main.py --listen 127.0.0.1 --port 8188 --use-pytorch-cross-attention >> /ComfyUI/comfyui.log 2>&1 &
 COMFY_PID=$!
 
 # Health Check: Wait for ComfyUI to respond on localhost:8188
